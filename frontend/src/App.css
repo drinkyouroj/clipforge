@@ -343,3 +343,129 @@
   opacity: 0.6;
   cursor: not-allowed;
 }
+
+/* Clip Preview */
+.clip-preview {
+  margin: 16px 0;
+  padding: 16px;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: 8px;
+}
+
+.clip-preview h4 {
+  margin: 0 0 12px;
+}
+
+.clip-preview__info {
+  margin-top: 8px;
+  font-size: 13px;
+  color: #6b7280;
+}
+
+/* Export Panel */
+.export-panel {
+  padding: 16px;
+  margin: 16px 0;
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  border-radius: 8px;
+}
+
+.export-panel h4 {
+  margin: 0 0 12px;
+}
+
+.export-panel__platforms {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.export-panel__platform-btn {
+  padding: 8px 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  background: white;
+  cursor: pointer;
+  text-align: center;
+  transition: border-color 0.2s;
+}
+
+.export-panel__platform-btn:hover {
+  border-color: #f97316;
+}
+
+.export-panel__platform-btn--active {
+  border-color: #f97316;
+  background: #fff7ed;
+  box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.2);
+}
+
+.export-panel__platform-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.export-panel__platform-ratio {
+  display: block;
+  font-size: 11px;
+  color: #9ca3af;
+}
+
+.export-btn {
+  padding: 10px 20px;
+  background: #f97316;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.export-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.export-panel__history {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid #fed7aa;
+}
+
+.export-panel__history h5 {
+  margin: 0 0 8px;
+  font-size: 13px;
+}
+
+.export-panel__item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 0;
+  font-size: 13px;
+}
+
+.export-panel__item-status {
+  color: #6b7280;
+  font-size: 12px;
+}
+
+.download-btn {
+  padding: 4px 10px;
+  background: #059669;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-size: 12px;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.download-btn:hover {
+  background: #047857;
+}

@@ -3,6 +3,8 @@ import { useParams, useNavigate } from "react-router-dom";
 import api from "../api/client";
 import ClipList from "../components/ClipCandidates/ClipList";
 import ClipAdjuster from "../components/ClipCandidates/ClipAdjuster";
+import ClipPreview from "../components/ClipPreview/ClipPreview";
+import ExportPanel from "../components/ExportPanel/ExportPanel";
 import JobProgress from "../components/VideoUpload/JobProgress";
 
 interface Video {
@@ -78,11 +80,27 @@ export default function VideoPage() {
         />
       )}
 
+      {selectedClip && videoId && (
+        <ClipPreview
+          videoId={videoId}
+          startTime={selectedClip.start_time}
+          endTime={selectedClip.end_time}
+        />
+      )}
+
       {selectedClip && video.duration && (
         <ClipAdjuster
           clip={selectedClip}
           videoDuration={video.duration}
           onUpdate={() => setRefreshKey((k) => k + 1)}
+        />
+      )}
+
+      {selectedClip && selectedClip.status === "selected" && (
+        <ExportPanel
+          clipId={selectedClip.id}
+          clipStatus={selectedClip.status}
+          onExportComplete={() => setRefreshKey((k) => k + 1)}
         />
       )}
 
