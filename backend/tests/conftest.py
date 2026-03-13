@@ -20,8 +20,6 @@ async def db_session():
     async with session_factory() as session:
         yield session
 
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
     await engine.dispose()
 
 
