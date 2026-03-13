@@ -111,6 +111,7 @@ class Clip(Base):
     platform_fit = Column(JSONB, nullable=True)
     status = Column(String(20), nullable=False, default="candidate")
     rendered_s3_key = Column(String(512), nullable=True)
+    face_track = Column(JSONB, nullable=True)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
 
     video = relationship("Video", back_populates="clips")
@@ -141,6 +142,7 @@ class Job(Base):
     error_message = Column(Text, nullable=True)
     started_at = Column(DateTime(timezone=True), nullable=True)
     completed_at = Column(DateTime(timezone=True), nullable=True)
+    render_context = Column(JSONB, nullable=True)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
 
     user = relationship("User", back_populates="jobs")
@@ -150,15 +152,21 @@ class Job(Base):
 class Export(Base):
     __tablename__ = "exports"
     __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'rendering', 'rendered', 'failed')",
+            name="ck_exports_status",
+        ),
         Index("ix_exports_user_created", "user_id", "created_at"),
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()"))
     clip_id = Column(UUID(as_uuid=True), ForeignKey("clips.id"), nullable=False)
+    job_id = Column(UUID(as_uuid=True), ForeignKey("jobs.id"), nullable=True)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     platform = Column(String(30), nullable=False)
     aspect_ratio = Column(String(10), nullable=False)
     resolution = Column(String(20), nullable=False)
+    status = Column(String(20), nullable=False, default="pending")
     s3_key = Column(String(512), nullable=True)
     download_url = Column(Text, nullable=True)
     expires_at = Column(DateTime(timezone=True), nullable=True)
@@ -166,3 +174,4 @@ class Export(Base):
 
     clip = relationship("Clip", back_populates="exports")
     user = relationship("User", back_populates="exports")
+    job = relationship("Job", backref="export")
