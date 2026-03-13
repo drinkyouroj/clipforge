@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 
 from app.config import settings
-from app.db.models import Job, Transcript, Video
+from app.db.models import Clip, Job, Transcript, Video
 from app.transcription.audio import extract_audio
 from app.transcription.service import transcribe_audio
 from app.videos.storage import download_from_s3
@@ -148,5 +148,123 @@ async def transcribe_video(ctx, video_id: str, user_id: str):
                     os.unlink(path)
                 except OSError:
                     pass
+        if db:
+            await db.close()
+
+
+async def detect_clips_task(ctx, video_id: str, user_id: str):
+    """ARQ task: run clip detection on a transcribed video."""
+    from app.clip_detection.detector import detect_clips, detect_clips_long_video
+
+    db = await _get_db_session()
+
+    try:
+        vid_uuid = UUID(video_id)
+        usr_uuid = UUID(user_id)
+
+        # Find pending detect_clips job
+        job_result = await db.execute(
+            select(Job).where(
+                Job.video_id == vid_uuid,
+                Job.user_id == usr_uuid,
+                Job.job_type == "detect_clips",
+                Job.status == "pending",
+            )
+        )
+        job = job_result.scalar_one_or_none()
+        if not job:
+            return
+
+        job.status = "running"
+        job.started_at = datetime.now(timezone.utc)
+        await db.commit()
+
+        # Fetch video and transcript
+        video_result = await db.execute(
+            select(Video).where(Video.id == vid_uuid, Video.user_id == usr_uuid)
+        )
+        video = video_result.scalar_one_or_none()
+        if not video:
+            job.status = "failed"
+            job.error_message = "Video not found"
+            job.completed_at = datetime.now(timezone.utc)
+            await db.commit()
+            return
+
+        transcript_result = await db.execute(
+            select(Transcript).where(Transcript.video_id == vid_uuid)
+        )
+        transcript = transcript_result.scalar_one_or_none()
+        if not transcript:
+            job.status = "failed"
+            job.error_message = "Transcript not found"
+            job.completed_at = datetime.now(timezone.utc)
+            await db.commit()
+            return
+
+        # Run clip detection
+        word_timestamps = transcript.word_timestamps or []
+        video_duration = video.duration or 0.0
+
+        if video_duration > 3600:  # > 60 minutes
+            result = await detect_clips_long_video(
+                transcript.content, word_timestamps, video_duration
+            )
+        else:
+            result = await detect_clips(
+                transcript.content, word_timestamps, video_duration
+            )
+
+        # Store clip candidates in DB
+        clips_data = result.get("clips", [])
+        if not clips_data:
+            job.status = "failed"
+            job.error_message = "No valid clips detected"
+            job.completed_at = datetime.now(timezone.utc)
+            await db.commit()
+            return
+
+        for clip_data in clips_data:
+            clip = Clip(
+                video_id=vid_uuid,
+                transcript_id=transcript.id,
+                start_time=clip_data["start_time"],
+                end_time=clip_data["end_time"],
+                duration=clip_data["duration"],
+                virality_score=clip_data.get("virality_score"),
+                hook=clip_data.get("hook"),
+                reasoning=clip_data.get("reasoning"),
+                clip_type=clip_data.get("clip_type"),
+                suggested_title=clip_data.get("suggested_title"),
+                platform_fit=clip_data.get("platform_fit"),
+                status="candidate",
+            )
+            db.add(clip)
+
+        job.status = "completed"
+        job.completed_at = datetime.now(timezone.utc)
+        await db.commit()
+
+    except Exception as e:
+        try:
+            if db:
+                job_result = await db.execute(
+                    select(Job).where(
+                        Job.video_id == UUID(video_id),
+                        Job.job_type == "detect_clips",
+                        Job.status == "running",
+                    )
+                )
+                job = job_result.scalar_one_or_none()
+                if job:
+                    job.status = "failed"
+                    job.error_message = str(e)[:500]
+                    job.completed_at = datetime.now(timezone.utc)
+                    await db.commit()
+        except Exception:
+            pass
+        raise
+
+    finally:
         if db:
             await db.close()

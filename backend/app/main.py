@@ -5,6 +5,7 @@ from app.auth.router import router as auth_router
 from app.videos.router import router as videos_router
 from app.jobs.router import router as jobs_router
 from app.transcription.router import router as transcription_router
+from app.clip_detection.router import router as clips_router
 
 app = FastAPI(title="ClipForge", version="0.1.0")
 
@@ -20,6 +21,7 @@ app.include_router(auth_router)
 app.include_router(videos_router)
 app.include_router(jobs_router)
 app.include_router(transcription_router)
+app.include_router(clips_router)
 
 
 @app.get("/health")

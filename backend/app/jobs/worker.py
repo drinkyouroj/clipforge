@@ -1,7 +1,7 @@
 from arq.connections import RedisSettings
 
 from app.config import settings
-from app.jobs.tasks import transcribe_video
+from app.jobs.tasks import transcribe_video, detect_clips_task
 
 
 async def startup(ctx):
@@ -15,7 +15,7 @@ async def shutdown(ctx):
 
 
 class WorkerSettings:
-    functions = [transcribe_video]
+    functions = [transcribe_video, detect_clips_task]
     on_startup = startup
     on_shutdown = shutdown
     redis_settings = RedisSettings.from_dsn(settings.redis_url)
