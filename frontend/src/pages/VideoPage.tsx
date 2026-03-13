@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import api from "../api/client";
 import ClipList from "../components/ClipCandidates/ClipList";
+import ClipAdjuster from "../components/ClipCandidates/ClipAdjuster";
 import JobProgress from "../components/VideoUpload/JobProgress";
 
 interface Video {
@@ -77,14 +78,12 @@ export default function VideoPage() {
         />
       )}
 
-      {selectedClip && (
-        <div className="clip-preview-info">
-          <h3>Selected: {selectedClip.suggested_title || "Untitled Clip"}</h3>
-          <p>
-            {Math.round(selectedClip.start_time)}s –{" "}
-            {Math.round(selectedClip.end_time)}s ({Math.round(selectedClip.duration)}s)
-          </p>
-        </div>
+      {selectedClip && video.duration && (
+        <ClipAdjuster
+          clip={selectedClip}
+          videoDuration={video.duration}
+          onUpdate={() => setRefreshKey((k) => k + 1)}
+        />
       )}
 
       {videoId && (

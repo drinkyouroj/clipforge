@@ -15,10 +15,11 @@ router = APIRouter(prefix="/clips", tags=["clips"])
 @router.get("/video/{video_id}", response_model=ClipListResponse)
 async def get_clips_for_video(
     video_id: UUID,
+    status: str | None = None,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get all clip candidates for a video (user-scoped)."""
+    """Get all clip candidates for a video (user-scoped). Optional status filter."""
     # Verify video belongs to user
     video_result = await db.execute(
         select(Video).where(Video.id == video_id, Video.user_id == user.id)
@@ -26,11 +27,12 @@ async def get_clips_for_video(
     if not video_result.scalar_one_or_none():
         raise HTTPException(status_code=404, detail="Video not found")
 
-    result = await db.execute(
-        select(Clip)
-        .where(Clip.video_id == video_id)
-        .order_by(Clip.virality_score.desc().nulls_last())
-    )
+    query = select(Clip).where(Clip.video_id == video_id)
+    if status:
+        query = query.where(Clip.status == status)
+    query = query.order_by(Clip.virality_score.desc().nulls_last())
+
+    result = await db.execute(query)
     clips = list(result.scalars().all())
     return ClipListResponse(clips=clips, total=len(clips))
 
@@ -115,6 +117,16 @@ async def update_clip(
     if data.start_time is not None or data.end_time is not None:
         clip.duration = clip.end_time - clip.start_time
     if data.status is not None:
+        # Per DECISION_006: only candidate↔selected allowed via API
+        allowed_transitions = {
+            ("candidate", "selected"),
+            ("selected", "candidate"),
+        }
+        if (clip.status, data.status) not in allowed_transitions:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot transition from '{clip.status}' to '{data.status}'",
+            )
         clip.status = data.status
 
     await db.commit()

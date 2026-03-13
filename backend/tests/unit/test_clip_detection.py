@@ -170,6 +170,44 @@ async def test_update_clip_status(auth_client, video_with_clips):
     assert resp.json()["status"] == "selected"
 
 
+async def test_invalid_status_transition(auth_client, video_with_clips):
+    """Cannot transition directly to 'rendered' via API."""
+    _, clips = video_with_clips
+    resp = await auth_client.patch(
+        f"/clips/{clips[0].id}",
+        json={"status": "rendered"},
+    )
+    assert resp.status_code == 400
+
+
+async def test_deselect_clip(auth_client, video_with_clips):
+    """Can deselect a clip (selected → candidate)."""
+    _, clips = video_with_clips
+    # Select first
+    await auth_client.patch(f"/clips/{clips[0].id}", json={"status": "selected"})
+    # Deselect
+    resp = await auth_client.patch(f"/clips/{clips[0].id}", json={"status": "candidate"})
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "candidate"
+
+
+async def test_filter_clips_by_status(auth_client, video_with_clips):
+    """Can filter clips by status query param."""
+    video, clips = video_with_clips
+    # Select one clip
+    await auth_client.patch(f"/clips/{clips[0].id}", json={"status": "selected"})
+
+    # Filter for selected only
+    resp = await auth_client.get(f"/clips/video/{video.id}?status=selected")
+    assert resp.status_code == 200
+    assert resp.json()["total"] == 1
+
+    # Filter for candidates only
+    resp = await auth_client.get(f"/clips/video/{video.id}?status=candidate")
+    assert resp.status_code == 200
+    assert resp.json()["total"] == 1
+
+
 def test_format_transcript_with_timestamps():
     from app.clip_detection.detector import format_transcript_with_timestamps
 

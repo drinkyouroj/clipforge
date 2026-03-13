@@ -274,3 +274,72 @@
   font-size: 13px;
   color: #6b7280;
 }
+
+/* Clip Adjuster */
+.clip-adjuster {
+  padding: 16px;
+  margin: 16px 0;
+  background: #faf5ff;
+  border: 1px solid #d8b4fe;
+  border-radius: 8px;
+}
+
+.clip-adjuster h4 {
+  margin: 0 0 12px;
+}
+
+.clip-adjuster__timeline {
+  position: relative;
+  height: 12px;
+  background: #e5e7eb;
+  border-radius: 6px;
+  margin-bottom: 16px;
+}
+
+.clip-adjuster__range {
+  position: absolute;
+  height: 100%;
+  background: #7c3aed;
+  border-radius: 6px;
+  opacity: 0.6;
+}
+
+.clip-adjuster__controls {
+  display: flex;
+  gap: 24px;
+  margin-bottom: 12px;
+}
+
+.clip-adjuster__controls label {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.clip-adjuster__controls input[type="range"] {
+  width: 100%;
+  display: block;
+  margin-top: 4px;
+}
+
+.clip-adjuster__info {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  margin-bottom: 12px;
+}
+
+.save-btn {
+  padding: 8px 16px;
+  background: #7c3aed;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.save-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
