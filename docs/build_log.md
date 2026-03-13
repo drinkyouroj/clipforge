@@ -148,3 +148,56 @@
 - **13 commits** on develop for Week 3
 - **Backend:** rendering module (specs, captions, reframe, ffmpeg_cmd, pipeline), export module (router, schemas)
 - **Frontend:** ClipPreview, ExportPanel, updated VideoPage with full export workflow
+
+## 2026-03-13 — Session 5: Week 4 Implementation (Billing + Polish + Launch)
+
+### DECISION_008: Billing Model
+- 3-tier credit-based subscriptions: free (10/mo), starter ($19/mo, 100), pro ($49/mo, unlimited)
+- Billing state on User model (5 new columns), no separate tables
+- Atomic credit enforcement via UPDATE...WHERE...RETURNING
+- Stripe Checkout for subscription creation, Billing Portal for management
+- Out-of-order webhook protection via event timestamps
+
+### DECISION_009: Video Lifecycle & Cleanup
+- Enhanced user-initiated delete: immediate S3 cleanup, soft-delete DB records
+- DB records retained 7 days for undo
+- Daily ARQ cron task: auto-expire (30d), hard-delete (7d after soft-delete), billing reset
+- Per-video transactions, skip auto-expire for videos with running jobs
+
+### Database Changes
+- `User.stripe_customer_id` (String, unique) — Stripe customer reference
+- `User.subscription_tier` (String, CHECK: free/starter/pro, default: free)
+- `User.subscription_stripe_id` (String) — Stripe subscription ID
+- `User.current_period_end` (DateTime) — billing cycle end
+- `User.period_exports_used` (Integer, default: 0) — reset on invoice.paid
+- Alembic migration generated and committed
+
+### Billing Backend
+- `billing/service.py`: Stripe checkout, portal, webhook handlers, credit checks
+- `billing/router.py`: POST /checkout, POST /portal, GET /status, POST /webhook
+- `billing/schemas.py`: CheckoutRequest, PortalResponse, BillingStatusResponse
+- Credit enforcement replaces 24-hour rate limit in export endpoint
+- Free-tier reset via daily cron + current_period_end at registration
+
+### Video Lifecycle
+- Enhanced `soft_delete_video`: immediate S3 cleanup, export S3 cleanup, job cancellation
+- `cleanup_expired_content` ARQ cron task: auto-expire, hard-delete, billing reset
+- Per-video transactions, dependency-order deletes (exports → clips → transcript → jobs → video)
+
+### Export API Enhancement
+- `GET /exports` — paginated user export history for account page
+
+### Frontend
+- `LandingPage.tsx`: Hero, how it works, features, pricing, footer
+- `AccountPage.tsx`: Profile, subscription management, export history
+- `TermsPage.tsx`: Placeholder Terms of Service
+- `PrivacyPage.tsx`: Placeholder Privacy Policy
+- `App.tsx`: New page routes (landing, account, terms, privacy)
+- `DashboardPage.tsx`: Account link in header
+
+### Stats
+- **125 tests passing** across 20 test files (+21 from Week 3)
+- **9 DECISION docs** filed (DECISION_001 through DECISION_009)
+- **18 commits** on develop for Week 4
+- **Backend:** billing module (service, router, schemas), enhanced delete, cleanup task
+- **Frontend:** LandingPage, AccountPage, TermsPage, PrivacyPage, routing updates
