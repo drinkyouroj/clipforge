@@ -1,6 +1,6 @@
 import os
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from uuid import UUID
 
 from sqlalchemy import select
@@ -10,7 +10,7 @@ from app.config import settings
 from app.db.models import Clip, Job, Transcript, Video
 from app.transcription.audio import extract_audio
 from app.transcription.service import transcribe_audio
-from app.videos.storage import download_from_s3
+from app.videos.storage import download_from_s3, delete_s3_object
 
 TEMP_DIR = "/tmp/clipforge"
 
@@ -292,3 +292,179 @@ async def detect_clips_task(ctx, video_id: str, user_id: str):
     finally:
         if db:
             await db.close()
+
+
+async def cleanup_expired_content(ctx):
+    """Daily cleanup task — auto-expire, hard-delete, and reset billing periods.
+
+    1. Auto-expire videos older than 30 days (S3 cleanup + soft delete)
+    2. Hard-delete videos soft-deleted more than 7 days ago
+    3. Reset period_exports_used for users with expired billing periods
+    """
+    import logging
+    from dateutil.relativedelta import relativedelta
+    from app.db.models import Clip, Export, Job, Transcript, User, Video
+
+    logger = logging.getLogger(__name__)
+    db = await _get_db_session()
+
+    try:
+        now = datetime.now(timezone.utc)
+        thirty_days_ago = now - timedelta(days=30)
+        seven_days_ago = now - timedelta(days=7)
+
+        # --- 1. Auto-expire old videos (30+ days) ---
+        result = await db.execute(
+            select(Video).where(
+                Video.deleted_at.is_(None),
+                Video.created_at < thirty_days_ago,
+            )
+        )
+        old_videos = list(result.scalars().all())
+
+        for video in old_videos:
+            # Skip if any jobs are still running
+            running_jobs = await db.execute(
+                select(Job).where(
+                    Job.video_id == video.id,
+                    Job.status == "running",
+                )
+            )
+            if running_jobs.scalar_one_or_none():
+                logger.info(f"Cleanup: skipping video {video.id} — running jobs")
+                continue
+
+            try:
+                # Delete source S3 object
+                try:
+                    await delete_s3_object(video.s3_key)
+                except Exception:
+                    pass
+
+                # Delete export S3 objects
+                clip_result = await db.execute(
+                    select(Clip.id).where(Clip.video_id == video.id)
+                )
+                clip_ids = [row[0] for row in clip_result.all()]
+                if clip_ids:
+                    export_result = await db.execute(
+                        select(Export).where(Export.clip_id.in_(clip_ids))
+                    )
+                    for export in export_result.scalars().all():
+                        if export.s3_key:
+                            try:
+                                await delete_s3_object(export.s3_key)
+                            except Exception:
+                                pass
+
+                # Cancel pending/running jobs
+                job_result = await db.execute(
+                    select(Job).where(
+                        Job.video_id == video.id,
+                        Job.status.in_(["pending", "running"]),
+                    )
+                )
+                for job in job_result.scalars().all():
+                    job.status = "failed"
+                    job.error_message = "Video auto-expired (30 days)"
+                    job.completed_at = now
+
+                # Soft-delete
+                video.deleted_at = now
+                video.status = "deleted"
+                await db.commit()
+                logger.info(f"Cleanup: auto-expired video {video.id}")
+
+            except Exception as e:
+                await db.rollback()
+                logger.error(f"Cleanup: failed to auto-expire video {video.id}: {e}")
+
+        # --- 2. Hard-delete old soft-deleted videos (7+ days) ---
+        result = await db.execute(
+            select(Video).where(
+                Video.deleted_at.isnot(None),
+                Video.deleted_at < seven_days_ago,
+            )
+        )
+        deleted_videos = list(result.scalars().all())
+
+        for video in deleted_videos:
+            try:
+                # Safety-net S3 delete
+                try:
+                    await delete_s3_object(video.s3_key)
+                except Exception:
+                    pass
+
+                # Delete in dependency order: exports → clips → transcript → jobs → video
+                clip_result = await db.execute(
+                    select(Clip.id).where(Clip.video_id == video.id)
+                )
+                clip_ids = [row[0] for row in clip_result.all()]
+
+                if clip_ids:
+                    # Delete exports and their S3 objects
+                    export_result = await db.execute(
+                        select(Export).where(Export.clip_id.in_(clip_ids))
+                    )
+                    for export in export_result.scalars().all():
+                        if export.s3_key:
+                            try:
+                                await delete_s3_object(export.s3_key)
+                            except Exception:
+                                pass
+                        await db.delete(export)
+
+                    # Delete clips
+                    for clip_id in clip_ids:
+                        clip_obj_result = await db.execute(
+                            select(Clip).where(Clip.id == clip_id)
+                        )
+                        clip_obj = clip_obj_result.scalar_one_or_none()
+                        if clip_obj:
+                            await db.delete(clip_obj)
+
+                # Delete transcript
+                transcript_result = await db.execute(
+                    select(Transcript).where(Transcript.video_id == video.id)
+                )
+                transcript = transcript_result.scalar_one_or_none()
+                if transcript:
+                    await db.delete(transcript)
+
+                # Delete jobs
+                job_result = await db.execute(
+                    select(Job).where(Job.video_id == video.id)
+                )
+                for job in job_result.scalars().all():
+                    await db.delete(job)
+
+                # Delete video
+                await db.delete(video)
+                await db.commit()
+                logger.info(f"Cleanup: hard-deleted video {video.id}")
+
+            except Exception as e:
+                await db.rollback()
+                logger.error(f"Cleanup: failed to hard-delete video {video.id}: {e}")
+
+        # --- 3. Reset expired billing periods ---
+        result = await db.execute(
+            select(User).where(
+                User.current_period_end.isnot(None),
+                User.current_period_end < now,
+            )
+        )
+        expired_users = list(result.scalars().all())
+
+        for user in expired_users:
+            user.period_exports_used = 0
+            # Advance period by 1 month
+            user.current_period_end = user.current_period_end + relativedelta(months=1)
+            logger.info(f"Cleanup: reset billing period for user {user.id}")
+
+        if expired_users:
+            await db.commit()
+
+    finally:
+        await db.close()

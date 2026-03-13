@@ -1,7 +1,8 @@
 from arq.connections import RedisSettings
+from arq.cron import cron
 
 from app.config import settings
-from app.jobs.tasks import transcribe_video, detect_clips_task
+from app.jobs.tasks import transcribe_video, detect_clips_task, cleanup_expired_content
 from app.rendering.pipeline import prepare_render_task, execute_render_task, upload_output_task
 
 
@@ -22,6 +23,10 @@ class WorkerSettings:
         prepare_render_task,
         execute_render_task,
         upload_output_task,
+        cleanup_expired_content,
+    ]
+    cron_jobs = [
+        cron(cleanup_expired_content, hour=3, minute=0),
     ]
     on_startup = startup
     on_shutdown = shutdown
