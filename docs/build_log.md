@@ -105,3 +105,46 @@
 - **5 commits** on develop for Week 2
 - **Backend:** clip_detection module (detector, scorer, router, schemas, prompts)
 - **Frontend:** ClipCandidates components, VideoPage with full clip workflow
+
+## 2026-03-13 — Session 4: Week 3 Implementation (Render Pipeline + Captions + Export)
+
+### DECISION_007: Render Pipeline and FFmpeg Command Design
+- Three-step chained ARQ pipeline: prepare_render → execute_render → upload_output
+- Export-centric model: one Export per clip-platform, Export.status tracks lifecycle
+- Face detection via mediapipe with center crop fallback
+- ASS/SSA captions with per-word yellow/white highlighting
+- FFmpeg: -ss input seeking, crop/scale/ass filter chain, H.264 CRF 23, AAC 192k, loudnorm -14 LUFS
+- Output size sanity check (< 2x input), temp file cleanup with 2-level subdirectory sweep
+
+### Database Changes
+- `Clip.face_track` (JSONB) — cached mediapipe face position track, reusable across exports
+- `Export.status` (String, CHECK) — pending → rendering → rendered → failed
+- `Export.job_id` (UUID FK) — links export to its render job
+- `Job.render_context` (JSONB) — pipeline state shared between steps
+- Alembic migration generated and committed
+
+### Rendering Modules
+- `specs.py`: Platform spec lookup for 5 platforms (shorts, tiktok, reels, square, twitter)
+- `captions.py`: Word timestamps → ASS subtitle file with per-word color highlighting
+- `reframe.py`: Face detection, moving average smoothing (window=15), crop calculation per aspect ratio
+- `ffmpeg_cmd.py`: FFmpeg command assembly with crop/scale/ass/loudnorm filter chain
+- `pipeline.py`: Three chained ARQ tasks with error handling and temp file cleanup
+
+### Export API
+- `POST /exports` — create export + job, validate clip ownership and selection, rate limit (10/day)
+- `GET /exports/{id}` — user-scoped export status and download URL
+- `GET /exports/clip/{clip_id}` — list all exports for a clip
+- Pydantic schemas: ExportRequest, ExportResponse, ExportListResponse
+
+### Frontend
+- `ClipPreview.tsx`: In-browser video preview using presigned URL + media fragments
+- `ExportPanel.tsx`: Platform selector (5 options), export trigger, job progress polling, download links
+- `VideoPage.tsx`: Integrated preview, adjuster, and export panel for selected clips
+- `GET /videos/{id}/preview-url` — 15-minute presigned URL for in-browser preview
+
+### Stats
+- **104 tests passing** across 13 test files (+44 from Week 2)
+- **7 DECISION docs** filed (DECISION_001 through DECISION_007)
+- **13 commits** on develop for Week 3
+- **Backend:** rendering module (specs, captions, reframe, ffmpeg_cmd, pipeline), export module (router, schemas)
+- **Frontend:** ClipPreview, ExportPanel, updated VideoPage with full export workflow
