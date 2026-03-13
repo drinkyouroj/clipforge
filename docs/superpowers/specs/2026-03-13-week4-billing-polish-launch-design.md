@@ -64,13 +64,31 @@ No new tables. User model holds all billing state. Single Alembic migration adds
 
 ### Credit Enforcement
 
-Modify existing `POST /exports` endpoint: before creating the export, check if the user's tier has a limit and `period_exports_used >= limit`. Return HTTP 402 with message "Export limit reached. Upgrade your plan." if exceeded. Increment `period_exports_used` on successful export creation.
+Modify existing `POST /exports` endpoint. Remove the existing 24-hour `render_rate_limit_free` rolling window check and replace with tier-based credit enforcement.
 
-### Webhook Security
+Use an atomic check-and-increment to prevent race conditions:
+```sql
+UPDATE users
+SET period_exports_used = period_exports_used + 1
+WHERE id = :user_id
+  AND (subscription_tier = 'pro'
+       OR period_exports_used < :tier_limit)
+RETURNING period_exports_used
+```
+If no row is returned, the limit was reached — return HTTP 402 with message "Export limit reached. Upgrade your plan."
+
+For `pro` tier (unlimited), the UPDATE always succeeds. For `free` (limit=10) and `starter` (limit=100), the WHERE clause ensures atomicity.
+
+### Free Tier Reset Mechanism
+
+Free-tier users have no Stripe subscription and no `invoice.paid` webhook to reset their counter. Use a rolling calendar month: set `current_period_end` to the first of next month at registration (and on each reset). The daily `cleanup_expired_content` task also resets `period_exports_used` to 0 for any user where `current_period_end < now()`, and advances `current_period_end` by one month. This covers both free and paid users whose webhook was missed.
+
+### Webhook Security & Ordering
 
 - Verify Stripe signature using `STRIPE_WEBHOOK_SECRET` and `stripe.Webhook.construct_event()`
 - Return 200 immediately to prevent Stripe retries on processing errors (process async if needed)
 - Idempotent handling: check if subscription state already matches before updating
+- **Out-of-order protection:** For subscription update/delete events, compare the Stripe event's `created` timestamp against the User's `updated_at`. If the event is older than the last update, discard it. This prevents stale webhook retries from overwriting newer state.
 
 ### Configuration (.env additions)
 
@@ -92,7 +110,7 @@ Current `DELETE /videos/{id}` only sets `deleted_at`. Enhanced flow:
 1. Set `deleted_at` on Video record (existing behavior)
 2. Delete S3 source object immediately (`video.s3_key`)
 3. Find all exports for this video's clips — delete their S3 objects
-4. Cancel any in-progress jobs for this video (set status to `failed`, error_message: "video deleted by user")
+4. Cancel any in-progress jobs for this video: set DB status to `failed` (error_message: "video deleted by user") AND abort the ARQ job in Redis (`arq.jobs.Job.abort()`) to prevent workers from picking up queued jobs
 5. DB records (video, transcript, clips, exports, jobs) remain for 7 days
 
 ### Daily Cleanup ARQ Task: `cleanup_expired_content`
@@ -206,6 +224,7 @@ backend/requirements.txt              # Add stripe package
 frontend/src/App.tsx                  # New routes, conditional landing/dashboard
 frontend/src/App.css                  # Landing, account, legal page styles
 frontend/src/api/client.ts            # Billing API calls (if extracted)
+.env.example                          # 4 new Stripe env vars
 ```
 
 ### Alembic Migration
@@ -218,4 +237,4 @@ Single migration: add `stripe_customer_id`, `subscription_tier`, `subscription_s
 
 DECISION_008 (billing model) is required before implementing Stripe integration. Covers: data model on User vs separate table, webhook event handling, credit enforcement placement, failure modes (webhook miss, double-charge, subscription state drift).
 
-No other decisions required — video cleanup and frontend pages don't involve the architectural stakes that trigger the protocol.
+DECISION_009 (video lifecycle & cleanup) is required before implementing the enhanced delete and daily cleanup task. Covers: immediate S3 deletion on user delete, dual-phase soft/hard delete timing, ARQ cron scheduling, failure modes (cleanup task fails midway, concurrent render + auto-expire race, orphaned S3 objects).
