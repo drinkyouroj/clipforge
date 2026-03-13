@@ -22,6 +22,54 @@ Captions: burned-in SRT-style, word-highlight on active word.
 
 ---
 
+## Docker Safety Rules
+
+**Never stop, restart, kill, or remove any running Docker container under any
+circumstances.** Other services outside this project's context may depend on them.
+
+Forbidden Docker operations — never run these, no exceptions:
+- `docker stop`, `docker kill`, `docker restart`
+- `docker compose stop`, `docker compose down`, `docker compose restart`
+- `docker rm`, `docker container prune`
+- Any flag that tears down or interrupts a running container (`--force`, `-f`, etc.)
+
+Allowed Docker operations:
+- `docker ps` — inspect what's running
+- `docker logs <container>` — read logs
+- `docker exec <container> <cmd>` — run commands inside a running container
+- `docker compose up -d` — start this project's containers
+- `docker compose build` — build this project's images
+
+### Per-Project Port Isolation
+
+Every project runs its own isolated Docker containers on dedicated ports.
+Do not share containers with other projects, even if the same service (e.g. PostgreSQL)
+is already running on the default port.
+
+**Before writing `docker-compose.yml`, scan for used ports:**
+```bash
+docker ps --format "{{.Ports}}"
+```
+
+**Then assign this project ports from an unused range.** Use this convention:
+
+| Service | Default port | This project's port |
+|---------|-------------|---------------------|
+| PostgreSQL | 5432 | [ASSIGN_ON_SETUP] |
+| Redis | 6379 | [ASSIGN_ON_SETUP] |
+| Backend API | 8000 | [ASSIGN_ON_SETUP] |
+| Frontend dev | 5173 | [ASSIGN_ON_SETUP] |
+
+Replace `[ASSIGN_ON_SETUP]` by scanning `docker ps` output on first run and picking
+the next available port above any in use. Document the chosen ports here once assigned
+and in `.env.example`. Never hardcode default ports in application config — always
+read from environment variables so ports can change without code edits.
+
+If a port conflict is detected at any point, stop and report it:
+"Port [X] is already in use. I will reassign to [Y] — confirm before I proceed."
+
+---
+
 ## The Adversarial Agent Protocol
 
 Every significant decision goes through a three-agent review before implementation.
