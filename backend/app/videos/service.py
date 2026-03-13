@@ -8,7 +8,7 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.db.models import Video
+from app.db.models import Clip, Export, Job, Video
 from app.videos.storage import generate_s3_key, upload_file_to_s3, delete_s3_object
 from app.videos.validation import validate_magic_bytes, validate_with_ffprobe
 
@@ -110,10 +110,56 @@ async def get_user_video(db: AsyncSession, user_id: UUID, video_id: UUID) -> Vid
 
 
 async def soft_delete_video(db: AsyncSession, user_id: UUID, video_id: UUID) -> bool:
+    """Soft-delete video with immediate S3 cleanup.
+
+    - Sets deleted_at on the Video record
+    - Deletes source S3 object immediately
+    - Deletes all export S3 objects for this video's clips
+    - Cancels in-progress/pending jobs
+    - DB records remain for 7 days (purged by daily cleanup)
+    """
     video = await get_user_video(db, user_id, video_id)
     if not video:
         return False
+
+    # 1. Soft-delete the video record
     video.deleted_at = datetime.utcnow()
     video.status = "deleted"
+
+    # 2. Delete source S3 object
+    try:
+        await delete_s3_object(video.s3_key)
+    except Exception:
+        pass  # Log but don't block — safety net catches on hard-delete
+
+    # 3. Find and delete export S3 objects
+    clip_result = await db.execute(
+        select(Clip.id).where(Clip.video_id == video_id)
+    )
+    clip_ids = [row[0] for row in clip_result.all()]
+
+    if clip_ids:
+        export_result = await db.execute(
+            select(Export).where(Export.clip_id.in_(clip_ids))
+        )
+        for export in export_result.scalars().all():
+            if export.s3_key:
+                try:
+                    await delete_s3_object(export.s3_key)
+                except Exception:
+                    pass
+
+    # 4. Cancel pending/running jobs
+    job_result = await db.execute(
+        select(Job).where(
+            Job.video_id == video_id,
+            Job.status.in_(["pending", "running"]),
+        )
+    )
+    for job in job_result.scalars().all():
+        job.status = "failed"
+        job.error_message = "Video deleted by user"
+        job.completed_at = datetime.utcnow()
+
     await db.commit()
     return True
