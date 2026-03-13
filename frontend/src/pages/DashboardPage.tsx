@@ -31,7 +31,10 @@ export default function DashboardPage() {
     <div className="dashboard">
       <header>
         <h1>ClipForge</h1>
-        <button onClick={handleLogout}>Log out</button>
+        <div style={{ display: "flex", gap: "8px" }}>
+          <button onClick={() => navigate("/account")}>Account</button>
+          <button onClick={handleLogout}>Log out</button>
+        </div>
       </header>
       <UploadForm onUploadComplete={handleUploadComplete} />
       {activeJobId && (
