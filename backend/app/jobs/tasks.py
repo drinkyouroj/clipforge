@@ -20,14 +20,38 @@ def _ensure_temp_dir():
 
 
 def _cleanup_old_temp_files():
-    """Sweep /tmp/clipforge/ for files older than 1 hour (per DECISION_004)."""
+    """Sweep /tmp/clipforge/ for files and directories older than 1 hour.
+
+    Walks two levels deep to handle render/{job_id}/ subdirectories,
+    since the render/ parent dir mtime refreshes when new jobs are created.
+    """
+    import shutil
+
     if not os.path.exists(TEMP_DIR):
         return
     now = datetime.now(timezone.utc).timestamp()
-    for f in os.listdir(TEMP_DIR):
-        path = os.path.join(TEMP_DIR, f)
+    for entry in os.listdir(TEMP_DIR):
+        path = os.path.join(TEMP_DIR, entry)
         try:
-            if os.path.isfile(path) and (now - os.path.getmtime(path)) > 3600:
+            if os.path.isdir(path):
+                # Walk into subdirectories (e.g., render/) to find old job dirs
+                for sub_entry in os.listdir(path):
+                    sub_path = os.path.join(path, sub_entry)
+                    try:
+                        if (now - os.path.getmtime(sub_path)) > 3600:
+                            if os.path.isdir(sub_path):
+                                shutil.rmtree(sub_path)
+                            else:
+                                os.unlink(sub_path)
+                    except OSError:
+                        pass
+                # Remove parent dir only if empty AND itself is old
+                try:
+                    if not os.listdir(path) and (now - os.path.getmtime(path)) > 3600:
+                        os.rmdir(path)
+                except OSError:
+                    pass
+            elif os.path.isfile(path) and (now - os.path.getmtime(path)) > 3600:
                 os.unlink(path)
         except OSError:
             pass
