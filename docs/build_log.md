@@ -68,3 +68,40 @@
 - bcrypt 5.0 incompatible with passlib → pinned to 4.0.1
 - python-magic → filetype (pure Python, no native libmagic dependency)
 - openai package needed separate install for Python 3.12
+
+## 2026-03-13 — Session 3: Week 2 Implementation (Clip Detection + Virality Scoring)
+
+### DECISION_005: Clip Detection Prompt Design
+- Versioned prompt files in `backend/app/clip_detection/prompts/`
+- Claude API (`claude-sonnet-4-5`) for transcript analysis
+- JSON resilience: strip markdown fences, trailing commas, 2 retries
+- Timestamp validation: clamp to video duration, 15-90s clip bounds
+- Deduplication: remove clips with >50% time overlap, keep higher score
+- Long video handling: split transcript at midpoint with 5-min overlap for >60min
+
+### DECISION_006: Clip Selection Data Model
+- Status transitions via API: only `candidate↔selected` allowed
+- Other transitions (`rendering`, `rendered`, `failed`) reserved for render pipeline
+- No separate selection table — status field on Clip model is sufficient
+- Original boundary values lost on adjustment (accepted tradeoff, re-detection is recovery path)
+
+### Clip Detection Backend
+- `detector.py`: Claude API integration, transcript formatting, long video splitting
+- `scorer.py`: JSON cleaning, clip validation, deduplication
+- `router.py`: GET /clips/video/{id}, GET /clips/{id}, PATCH /clips/{id}, POST /clips/detect/{id}
+- `schemas.py`: ClipResponse, ClipListResponse, ClipUpdateRequest
+- `prompts/virality_v1.txt`: Full scoring rubric with injection guards
+- `detect_clips_task` in jobs/tasks.py: ARQ task with job status management
+
+### Clip Detection Frontend
+- `ClipCard.tsx`: Score bar with color gradient, hook display, platform tags
+- `ClipList.tsx`: Fetches and displays clip candidates sorted by virality score
+- `ClipAdjuster.tsx`: Range sliders for start/end time, visual timeline, save boundaries
+- `VideoPage.tsx`: Detect button, job progress, clip selection and adjustment
+
+### Stats
+- **60 tests passing** across 9 test files (+23 from Week 1)
+- **6 DECISION docs** filed (DECISION_001 through DECISION_006)
+- **5 commits** on develop for Week 2
+- **Backend:** clip_detection module (detector, scorer, router, schemas, prompts)
+- **Frontend:** ClipCandidates components, VideoPage with full clip workflow
