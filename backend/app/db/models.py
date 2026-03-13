@@ -25,6 +25,12 @@ class Base(DeclarativeBase):
 
 class User(Base):
     __tablename__ = "users"
+    __table_args__ = (
+        CheckConstraint(
+            "subscription_tier IN ('free', 'starter', 'pro')",
+            name="ck_users_subscription_tier",
+        ),
+    )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()"))
     email = Column(String(255), unique=True, nullable=False, index=True)
@@ -37,6 +43,13 @@ class User(Base):
     tos_accepted_at = Column(DateTime(timezone=True), nullable=False)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    # Billing
+    stripe_customer_id = Column(String(255), nullable=True, unique=True)
+    subscription_tier = Column(String(20), nullable=False, default="free")
+    subscription_stripe_id = Column(String(255), nullable=True)
+    current_period_end = Column(DateTime(timezone=True), nullable=True)
+    period_exports_used = Column(Integer, nullable=False, default=0)
 
     videos = relationship("Video", back_populates="user")
     jobs = relationship("Job", back_populates="user")
