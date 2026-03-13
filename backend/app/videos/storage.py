@@ -33,6 +33,11 @@ def generate_presigned_url(s3_key: str, expires_in: int = 3600) -> str:
     )
 
 
+async def download_from_s3(s3_key: str, local_path: str) -> None:
+    client = get_s3_client()
+    client.download_file(settings.s3_bucket_name, s3_key, local_path)
+
+
 async def delete_s3_object(s3_key: str) -> None:
     client = get_s3_client()
     client.delete_object(Bucket=settings.s3_bucket_name, Key=s3_key)
