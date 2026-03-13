@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user
-from app.db.models import Clip, User, Video
+from app.db.models import Clip, Job, Transcript, User, Video
 from app.db.session import get_db
 from app.clip_detection.schemas import ClipResponse, ClipListResponse, ClipUpdateRequest
 
@@ -33,6 +33,44 @@ async def get_clips_for_video(
     )
     clips = list(result.scalars().all())
     return ClipListResponse(clips=clips, total=len(clips))
+
+
+@router.post("/detect/{video_id}")
+async def trigger_clip_detection(
+    video_id: UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Trigger clip detection for a video. Creates a detect_clips job."""
+    video_result = await db.execute(
+        select(Video).where(Video.id == video_id, Video.user_id == user.id)
+    )
+    video = video_result.scalar_one_or_none()
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found")
+
+    # Check transcript exists
+    transcript_result = await db.execute(
+        select(Transcript).where(Transcript.video_id == video_id)
+    )
+    if not transcript_result.scalar_one_or_none():
+        raise HTTPException(status_code=400, detail="Video has no transcript yet")
+
+    # Create job
+    job = Job(
+        user_id=user.id,
+        video_id=video_id,
+        job_type="detect_clips",
+        status="pending",
+    )
+    db.add(job)
+    await db.commit()
+    await db.refresh(job)
+
+    # TODO: enqueue ARQ task here when worker is running
+    # await arq_pool.enqueue_job("detect_clips_task", str(video_id), str(user.id))
+
+    return {"job_id": str(job.id), "status": "pending"}
 
 
 @router.get("/{clip_id}", response_model=ClipResponse)

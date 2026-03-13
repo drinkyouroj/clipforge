@@ -137,3 +137,140 @@
   font-weight: 600;
   background: #f9fafb;
 }
+
+.video-list tr:hover {
+  background: #f3f4f6;
+}
+
+/* Video Page */
+.video-page {
+  max-width: 800px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.back-btn {
+  padding: 6px 12px;
+  background: none;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  cursor: pointer;
+  margin-bottom: 16px;
+}
+
+.detect-btn {
+  padding: 10px 20px;
+  background: #7c3aed;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  margin: 16px 0;
+}
+
+.clip-preview-info {
+  padding: 16px;
+  margin: 16px 0;
+  background: #faf5ff;
+  border: 1px solid #d8b4fe;
+  border-radius: 8px;
+}
+
+/* Clip Cards */
+.clip-list {
+  margin-top: 24px;
+}
+
+.clip-card {
+  padding: 16px;
+  margin-bottom: 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.clip-card:hover {
+  border-color: #a78bfa;
+  box-shadow: 0 1px 4px rgba(124, 58, 237, 0.1);
+}
+
+.clip-card--selected {
+  border-color: #7c3aed;
+  box-shadow: 0 0 0 2px rgba(124, 58, 237, 0.2);
+}
+
+.clip-card__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.clip-card__title {
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.clip-card__type {
+  font-size: 12px;
+  padding: 2px 8px;
+  background: #f3f4f6;
+  border-radius: 12px;
+  color: #6b7280;
+}
+
+.clip-card__score-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.clip-card__score-bar {
+  flex: 1;
+  height: 8px;
+  background: #e5e7eb;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.clip-card__score-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.3s;
+}
+
+.clip-card__score-label {
+  font-weight: 700;
+  font-size: 14px;
+  min-width: 28px;
+  text-align: right;
+}
+
+.clip-card__hook {
+  font-style: italic;
+  color: #4b5563;
+  margin: 4px 0 8px;
+  font-size: 14px;
+}
+
+.clip-card__meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  color: #6b7280;
+}
+
+.clip-card__platforms {
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.5px;
+}
+
+.clip-card__reasoning {
+  margin-top: 8px;
+  font-size: 13px;
+  color: #6b7280;
+}

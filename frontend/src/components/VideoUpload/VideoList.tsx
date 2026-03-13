@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import api from "../../api/client";
 
 interface Video {
@@ -10,6 +11,7 @@ interface Video {
 }
 
 export default function VideoList() {
+  const navigate = useNavigate();
   const [videos, setVideos] = useState<Video[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -45,7 +47,7 @@ export default function VideoList() {
         </thead>
         <tbody>
           {videos.map((v) => (
-            <tr key={v.id}>
+            <tr key={v.id} onClick={() => navigate(`/video/${v.id}`)} style={{ cursor: "pointer" }}>
               <td>{v.original_filename}</td>
               <td>{v.status}</td>
               <td>{v.duration ? `${Math.round(v.duration)}s` : "—"}</td>
