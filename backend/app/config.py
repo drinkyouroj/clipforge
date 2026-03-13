@@ -17,6 +17,11 @@ class Settings(BaseSettings):
     max_upload_size: int = 500 * 1024 * 1024  # 500MB
     upload_rate_limit: int = 5  # per hour
     render_rate_limit_free: int = 10  # per day
+    frontend_url: str = "http://localhost:5173"
+    stripe_secret_key: str = ""
+    stripe_webhook_secret: str = ""
+    stripe_price_starter: str = ""
+    stripe_price_pro: str = ""
 
     class Config:
         env_file = ".env"
