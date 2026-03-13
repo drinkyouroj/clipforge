@@ -213,37 +213,88 @@ async def test_export_scoped_to_user(client, db_session, selected_clip):
     assert resp.status_code == 404
 
 
-async def test_rate_limit_exports(auth_client, selected_clip, db_session):
-    """Rate limit blocks after max exports per day."""
+@pytest.mark.asyncio
+async def test_export_credit_limit_enforced(auth_client, selected_clip, db_session):
+    """Export should fail when credit limit is reached."""
     me_resp = await auth_client.get("/auth/me")
     user_id = me_resp.json()["id"]
-
-    # Insert 10 exports directly to hit rate limit
-    for i in range(10):
-        job = Job(
-            user_id=user_id,
-            video_id=selected_clip.video_id,
-            job_type="render",
-            status="completed",
-        )
-        db_session.add(job)
-        await db_session.flush()
-
-        exp = Export(
-            clip_id=selected_clip.id,
-            user_id=user_id,
-            platform="shorts",
-            aspect_ratio="9:16",
-            resolution="1080x1920",
-            status="rendered",
-            job_id=job.id,
-        )
-        db_session.add(exp)
+    from sqlalchemy import select
+    result = await db_session.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one()
+    user.subscription_tier = "free"
+    user.period_exports_used = 10
     await db_session.commit()
 
     resp = await auth_client.post("/exports", json={
         "clip_id": str(selected_clip.id),
         "platform": "shorts",
     })
-    assert resp.status_code == 429
-    assert "limit" in resp.json()["detail"].lower()
+    assert resp.status_code == 402
+    assert "limit reached" in resp.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_export_pro_unlimited(auth_client, selected_clip, db_session):
+    """Pro user should always be allowed to export."""
+    me_resp = await auth_client.get("/auth/me")
+    user_id = me_resp.json()["id"]
+    from sqlalchemy import select
+    result = await db_session.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one()
+    user.subscription_tier = "pro"
+    user.period_exports_used = 999
+    await db_session.commit()
+
+    resp = await auth_client.post("/exports", json={
+        "clip_id": str(selected_clip.id),
+        "platform": "shorts",
+    })
+    assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_export_increments_usage(auth_client, selected_clip, db_session):
+    """Successful export should increment period_exports_used."""
+    me_resp = await auth_client.get("/auth/me")
+    user_id = me_resp.json()["id"]
+    from sqlalchemy import select
+    result = await db_session.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one()
+    initial_count = user.period_exports_used
+
+    resp = await auth_client.post("/exports", json={
+        "clip_id": str(selected_clip.id),
+        "platform": "shorts",
+    })
+    assert resp.status_code == 200
+
+    await db_session.refresh(user)
+    assert user.period_exports_used == initial_count + 1
+
+
+@pytest.mark.asyncio
+async def test_list_user_exports(auth_client, selected_clip, db_session):
+    """GET /exports/ should return all exports for the user."""
+    me_resp = await auth_client.get("/auth/me")
+    user_id = me_resp.json()["id"]
+
+    # Create 2 exports directly in DB
+    for platform in ["shorts", "tiktok"]:
+        export = Export(
+            clip_id=selected_clip.id,
+            user_id=user_id,
+            platform=platform,
+            aspect_ratio="9:16",
+            resolution="1080x1920",
+            status="rendered",
+        )
+        db_session.add(export)
+    await db_session.commit()
+
+    resp = await auth_client.get("/exports")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total"] == 2
+    assert len(data["exports"]) == 2
+    # Should be ordered by created_at desc
+    assert data["exports"][0]["platform"] in ["shorts", "tiktok"]

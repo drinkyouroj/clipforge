@@ -1,6 +1,5 @@
 """Export API endpoints."""
 
-from datetime import datetime, timezone, timedelta
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -8,7 +7,6 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user
-from app.config import settings
 from app.db.models import Clip, Export, Job, User, Video
 from app.db.session import get_db
 from app.export.schemas import ExportRequest, ExportResponse, ExportListResponse
@@ -40,19 +38,13 @@ async def create_export(
             detail=f"Clip must be 'selected' to export (current: '{clip.status}')",
         )
 
-    # Rate limit: count exports in last 24 hours
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
-    count_result = await db.execute(
-        select(func.count(Export.id)).where(
-            Export.user_id == user.id,
-            Export.created_at > cutoff,
-        )
-    )
-    export_count = count_result.scalar()
-    if export_count >= settings.render_rate_limit_free:
+    # Credit enforcement: atomic check-and-increment
+    from app.billing.service import check_and_increment_credits
+    allowed = await check_and_increment_credits(db, user.id, user.subscription_tier)
+    if not allowed:
         raise HTTPException(
-            status_code=429,
-            detail=f"Daily render limit reached ({settings.render_rate_limit_free}/day). Upgrade for more.",
+            status_code=402,
+            detail="Export limit reached. Upgrade your plan.",
         )
 
     # Get platform specs
@@ -95,6 +87,32 @@ async def create_export(
     # await pool.close()
 
     return export
+
+
+@router.get("", response_model=ExportListResponse)
+async def list_exports(
+    limit: int = 50,
+    offset: int = 0,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """List all exports for the current user."""
+    result = await db.execute(
+        select(Export)
+        .where(Export.user_id == user.id)
+        .order_by(Export.created_at.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    exports = list(result.scalars().all())
+
+    # Get total count
+    count_result = await db.execute(
+        select(func.count(Export.id)).where(Export.user_id == user.id)
+    )
+    total = count_result.scalar()
+
+    return ExportListResponse(exports=exports, total=total)
 
 
 @router.get("/{export_id}", response_model=ExportResponse)
