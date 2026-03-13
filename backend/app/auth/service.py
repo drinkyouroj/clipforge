@@ -2,6 +2,8 @@ import secrets
 from datetime import datetime, timedelta
 from uuid import UUID
 
+from dateutil.relativedelta import relativedelta
+
 from jose import jwt
 from passlib.context import CryptContext
 from sqlalchemy import select
@@ -36,11 +38,16 @@ async def register_user(db: AsyncSession, email: str, password: str) -> User:
     if result.scalar_one_or_none():
         raise ValueError("Email already registered")
 
+    now = datetime.utcnow()
+    # Set free tier period end to first of next month
+    next_month = now.replace(day=1) + relativedelta(months=1)
+
     user = User(
         email=email,
         hashed_password=hash_password(password),
-        tos_accepted_at=datetime.utcnow(),
+        tos_accepted_at=now,
         email_verification_token=generate_token(),
+        current_period_end=next_month,
     )
     db.add(user)
     await db.commit()
