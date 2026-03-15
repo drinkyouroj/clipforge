@@ -1,7 +1,5 @@
 """FFmpeg command assembly for clip rendering."""
 
-import os
-
 
 def build_ffmpeg_command(
     input_path: str,
@@ -53,7 +51,7 @@ def build_ffmpeg_command(
     cmd = [
         "ffmpeg",
         "-ss", str(start_time),
-        "-i", f"file:{os.path.abspath(input_path)}",
+        "-i", input_path,
         "-t", str(duration),
         "-vf", vf_chain,
         "-r", str(fps),

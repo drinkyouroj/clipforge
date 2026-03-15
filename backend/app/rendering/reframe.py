@@ -135,7 +135,7 @@ def extract_keyframes(video_path: str, start_time: float, duration: float, inter
     subprocess.run(
         [
             "ffmpeg", "-ss", str(start_time),
-            "-i", f"file:{os.path.abspath(video_path)}",
+            "-i", video_path,
             "-t", str(duration),
             "-vf", f"fps=1/{interval}",
             "-q:v", "2",

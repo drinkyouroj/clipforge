@@ -4,12 +4,9 @@ import subprocess
 
 def extract_audio(video_path: str, output_path: str) -> str:
     """Extract audio from video as mono 16kHz 64kbps MP3 for Whisper API."""
-    # Use file: protocol to prevent FFmpeg from interpreting special chars
-    # (e.g. | as concat separator) in filenames
-    ffmpeg_input = f"file:{os.path.abspath(video_path)}"
     subprocess.run(
         [
-            "ffmpeg", "-i", ffmpeg_input,
+            "ffmpeg", "-i", video_path,
             "-vn", "-ac", "1", "-ar", "16000",
             "-b:a", "64k",
             "-y", output_path,

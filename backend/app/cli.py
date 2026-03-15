@@ -278,11 +278,17 @@ def process(
         duration = probe["duration"]
         console.print(f"[green]Valid video:[/green] {Path(video_path).name} ({duration:.0f}s)")
 
+        # Create a symlink with a safe filename for FFmpeg.
+        # FFmpeg interprets |, [, ] etc. as protocol separators even in list-mode.
+        video_ext = Path(video_path).suffix or ".mp4"
+        safe_video_path = os.path.join(tmp_dir, f"input{video_ext}")
+        os.symlink(os.path.abspath(video_path), safe_video_path)
+
         # === Step 2: Extract audio ===
         audio_path = os.path.join(tmp_dir, "audio.mp3")
         with console.status("[bold blue]Extracting audio..."):
             from app.transcription.audio import extract_audio
-            extract_audio(video_path, audio_path)
+            extract_audio(safe_video_path, audio_path)
         console.print("[green]Audio extracted.[/green]")
 
         # === Step 3: Transcribe ===
@@ -507,7 +513,7 @@ def process(
 
                     try:
                         result = render_clip_local(
-                            video_path=video_path,
+                            video_path=safe_video_path,
                             start_time=start,
                             end_time=end,
                             platform=plat,
