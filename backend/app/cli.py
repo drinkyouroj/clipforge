@@ -285,7 +285,7 @@ def process(
         os.symlink(os.path.abspath(video_path), safe_video_path)
 
         # === Step 2: Extract audio ===
-        audio_path = os.path.join(tmp_dir, "audio.mp3")
+        audio_path = os.path.join(tmp_dir, "audio.wav")
         with console.status("[bold blue]Extracting audio..."):
             from app.transcription.audio import extract_audio
             extract_audio(safe_video_path, audio_path)

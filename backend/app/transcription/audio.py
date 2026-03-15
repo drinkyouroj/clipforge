@@ -3,12 +3,15 @@ import subprocess
 
 
 def extract_audio(video_path: str, output_path: str) -> str:
-    """Extract audio from video as mono 16kHz 64kbps MP3 for Whisper API."""
+    """Extract audio from video as mono 16kHz WAV for Whisper.
+
+    Uses WAV (pcm_s16le) to avoid dependency on libmp3lame encoder.
+    """
     result = subprocess.run(
         [
             "ffmpeg", "-i", video_path,
             "-vn", "-ac", "1", "-ar", "16000",
-            "-b:a", "64k",
+            "-c:a", "pcm_s16le",
             "-y", output_path,
         ],
         capture_output=True, timeout=600,
@@ -44,7 +47,7 @@ def split_audio(audio_path: str, output_dir: str, chunk_duration: int = 3000) ->
     total_duration = float(probe["format"]["duration"])
 
     while offset < total_duration:
-        chunk_path = os.path.join(output_dir, f"chunk_{chunk_index:03d}.mp3")
+        chunk_path = os.path.join(output_dir, f"chunk_{chunk_index:03d}.wav")
         # Add 5s overlap (2.5s each side per DECISION_004)
         start = max(0, offset - 5) if chunk_index > 0 else 0
         duration = chunk_duration + (5 if chunk_index > 0 else 0)
@@ -54,7 +57,7 @@ def split_audio(audio_path: str, output_dir: str, chunk_duration: int = 3000) ->
                 "ffmpeg", "-i", audio_path,
                 "-ss", str(offset),
                 "-t", str(chunk_duration),
-                "-c", "copy",
+                "-c:a", "pcm_s16le",
                 "-y", chunk_path,
             ],
             capture_output=True, check=True, timeout=120,
