@@ -201,3 +201,26 @@
 - **18 commits** on develop for Week 4
 - **Backend:** billing module (service, router, schemas), enhanced delete, cleanup task
 - **Frontend:** LandingPage, AccountPage, TermsPage, PrivacyPage, routing updates
+
+## 2026-03-15 — CLI/TUI Implementation
+
+### DECISION_010: CLI/TUI Pipeline Design
+- Standalone CLI tool, no server/DB/S3 dependencies
+- Local Whisper via faster-whisper, local LLM via OpenAI-compatible API
+- Rich terminal output with progress bars and colored tables
+
+### CLI Features
+- `clipforge process <video>` with 12 flags
+- `clipforge setup` for interactive configuration
+- Config resolution: CLI flags > env vars > config file > interactive prompt
+- Interactive clip selection or auto via --min-score/--all
+- --detect-only mode for preview without rendering
+- Multi-platform rendering with face track caching
+- Idempotent output (skip existing, --overwrite to force)
+- Secure temp directory, empty transcript guard
+
+### Stats
+- **3 new test files** (config, transcribe, render) — 11 tests
+- **2 new source files** (cli.py, cli_config.py)
+- **1 new packaging file** (pyproject.toml)
+- **4 new dependencies** (typer, faster-whisper, tomli, tomli-w)
