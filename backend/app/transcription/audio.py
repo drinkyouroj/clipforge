@@ -4,15 +4,18 @@ import subprocess
 
 def extract_audio(video_path: str, output_path: str) -> str:
     """Extract audio from video as mono 16kHz 64kbps MP3 for Whisper API."""
-    subprocess.run(
+    result = subprocess.run(
         [
             "ffmpeg", "-i", video_path,
             "-vn", "-ac", "1", "-ar", "16000",
             "-b:a", "64k",
             "-y", output_path,
         ],
-        capture_output=True, check=True, timeout=600,
+        capture_output=True, timeout=600,
     )
+    if result.returncode != 0:
+        stderr = result.stderr.decode(errors="replace") if result.stderr else ""
+        raise RuntimeError(f"Audio extraction failed (exit {result.returncode}):\n{stderr}")
     if not os.path.exists(output_path):
         raise RuntimeError(f"Audio extraction failed: {output_path} not created")
     return output_path
