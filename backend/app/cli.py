@@ -7,8 +7,13 @@ import sys
 import tempfile
 from pathlib import Path
 
-# Ensure the backend directory is on sys.path when run directly
+# Ensure the backend directory is on sys.path when run directly.
+# Python adds the script's directory (app/) to sys.path[0], which shadows
+# the app package. Remove it and add the backend directory instead.
 _backend_dir = str(Path(__file__).resolve().parent.parent)
+_script_dir = str(Path(__file__).resolve().parent)
+if _script_dir in sys.path:
+    sys.path.remove(_script_dir)
 if _backend_dir not in sys.path:
     sys.path.insert(0, _backend_dir)
 
