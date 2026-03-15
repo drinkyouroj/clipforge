@@ -7,6 +7,11 @@ import sys
 import tempfile
 from pathlib import Path
 
+# Ensure the backend directory is on sys.path when run directly
+_backend_dir = str(Path(__file__).resolve().parent.parent)
+if _backend_dir not in sys.path:
+    sys.path.insert(0, _backend_dir)
+
 import typer
 from rich.console import Console
 from rich.progress import Progress
@@ -551,3 +556,7 @@ def process(
     finally:
         # Clean up temp directory
         shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+if __name__ == "__main__":
+    app()
