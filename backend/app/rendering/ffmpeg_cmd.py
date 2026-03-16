@@ -1,5 +1,43 @@
 """FFmpeg command assembly for clip rendering."""
 
+import subprocess
+
+_h264_encoder = None
+
+
+def get_h264_encoder() -> tuple[str, list[str]]:
+    """Detect the best available H264 encoder.
+
+    Returns (encoder_name, extra_flags) tuple.
+    """
+    global _h264_encoder
+    if _h264_encoder is not None:
+        return _h264_encoder
+
+    # Check available encoders
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-encoders", "-hide_banner"],
+            capture_output=True, text=True, timeout=5,
+        )
+        encoders = result.stdout
+    except Exception:
+        encoders = ""
+
+    if "libx264" in encoders:
+        _h264_encoder = ("libx264", ["-preset", "fast", "-crf", "23"])
+    elif "h264_videotoolbox" in encoders:
+        _h264_encoder = ("h264_videotoolbox", ["-q:v", "65"])
+    elif "h264_nvenc" in encoders:
+        _h264_encoder = ("h264_nvenc", ["-preset", "fast", "-cq", "23"])
+    elif "h264_vaapi" in encoders:
+        _h264_encoder = ("h264_vaapi", [])
+    else:
+        # Fallback: let FFmpeg pick its default H264 encoder
+        _h264_encoder = ("libx264", ["-crf", "23"])
+
+    return _h264_encoder
+
 
 def build_ffmpeg_command(
     input_path: str,
@@ -48,6 +86,8 @@ def build_ffmpeg_command(
 
     vf_chain = ",".join(vf_parts)
 
+    encoder, encoder_flags = get_h264_encoder()
+
     cmd = [
         "ffmpeg",
         "-ss", str(start_time),
@@ -55,9 +95,8 @@ def build_ffmpeg_command(
         "-t", str(duration),
         "-vf", vf_chain,
         "-r", str(fps),
-        "-c:v", "libx264",
-        "-preset", "fast",
-        "-crf", "23",
+        "-c:v", encoder,
+        *encoder_flags,
         "-c:a", "aac",
         "-b:a", "192k",
         "-ac", "2",
