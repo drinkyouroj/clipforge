@@ -1,5 +1,6 @@
 """ClipForge CLI — standalone video clip detection and rendering."""
 
+import json
 import os
 import shutil
 import subprocess
@@ -284,46 +285,57 @@ def process(
         safe_video_path = os.path.join(tmp_dir, f"input{video_ext}")
         os.symlink(os.path.abspath(video_path), safe_video_path)
 
-        # === Step 2: Extract audio ===
-        audio_path = os.path.join(tmp_dir, "audio.wav")
-        with console.status("[bold blue]Extracting audio..."):
-            from app.transcription.audio import extract_audio
-            extract_audio(safe_video_path, audio_path)
-        console.print("[green]Audio extracted.[/green]")
+        # === Steps 2-3: Extract audio + Transcribe (with resume cache) ===
+        os.makedirs(output_dir, exist_ok=True)
+        transcript_cache = os.path.join(output_dir, "transcript.json")
 
-        # === Step 3: Transcribe ===
-        from app.transcription.audio import split_audio
-        chunks = split_audio(audio_path, tmp_dir)
-        if len(chunks) <= 1:
-            chunks = [audio_path]
+        if os.path.isfile(transcript_cache) and not overwrite:
+            with open(transcript_cache) as f:
+                transcript = json.load(f)
+            word_count = len(transcript["words"])
+            console.print(f"[green]Loaded cached transcript ({word_count} words)[/green]")
+        else:
+            audio_path = os.path.join(tmp_dir, "audio.wav")
+            with console.status("[bold blue]Extracting audio..."):
+                from app.transcription.audio import extract_audio
+                extract_audio(safe_video_path, audio_path)
+            console.print("[green]Audio extracted.[/green]")
 
-        chunk_duration = 3000
+            from app.transcription.audio import split_audio
+            chunks = split_audio(audio_path, tmp_dir)
+            if len(chunks) <= 1:
+                chunks = [audio_path]
 
-        all_words = []
-        all_text = []
-        with Progress() as progress:
-            task = progress.add_task(
-                f"[blue]Transcribing with {cfg['whisper_model']} model...",
-                total=len(chunks),
-            )
-            for chunk_idx, chunk_path in enumerate(chunks):
-                result = transcribe_local(chunk_path, cfg["whisper_model"])
-                # Apply timestamp offset for chunked audio (DECISION_010-B fix)
-                time_offset = chunk_idx * chunk_duration if len(chunks) > 1 else 0.0
-                for w in result["words"]:
-                    w["start"] += time_offset
-                    w["end"] += time_offset
-                all_words.extend(result["words"])
-                all_text.append(result["text"])
-                progress.advance(task)
+            chunk_duration = 3000
 
-        transcript = {
-            "text": " ".join(all_text),
-            "words": all_words,
-        }
+            all_words = []
+            all_text = []
+            with Progress() as progress:
+                task = progress.add_task(
+                    f"[blue]Transcribing with {cfg['whisper_model']} model...",
+                    total=len(chunks),
+                )
+                for chunk_idx, chunk_path in enumerate(chunks):
+                    result = transcribe_local(chunk_path, cfg["whisper_model"])
+                    time_offset = chunk_idx * chunk_duration if len(chunks) > 1 else 0.0
+                    for w in result["words"]:
+                        w["start"] += time_offset
+                        w["end"] += time_offset
+                    all_words.extend(result["words"])
+                    all_text.append(result["text"])
+                    progress.advance(task)
 
-        word_count = len(transcript["words"])
-        console.print(f"[green]Transcribed:[/green] {word_count} words")
+            transcript = {
+                "text": " ".join(all_text),
+                "words": all_words,
+            }
+
+            # Cache transcript for resume
+            with open(transcript_cache, "w") as f:
+                json.dump(transcript, f)
+
+            word_count = len(transcript["words"])
+            console.print(f"[green]Transcribed:[/green] {word_count} words")
 
         # Empty transcript guard (DECISION_010)
         if word_count < 50:
@@ -333,45 +345,55 @@ def process(
             )
             raise typer.Exit(code=1)
 
-        # === Step 4: Detect clips ===
-        with console.status("[bold blue]Detecting viral clips..."):
-            try:
-                if duration > 3600:
-                    # Long video: split and detect in halves
-                    split_point = duration / 2
-                    overlap = 300.0
-                    first_words = [w for w in transcript["words"] if w.get("end", 0) <= split_point + overlap / 2]
-                    second_words = [w for w in transcript["words"] if w.get("start", 0) >= split_point - overlap / 2]
+        # === Step 4: Detect clips (with resume cache) ===
+        clips_cache = os.path.join(output_dir, "clips.json")
 
-                    result1 = detect_clips_local(
-                        " ".join(w["word"] for w in first_words), first_words,
-                        duration, cfg["llm_url"], cfg["llm_model"],
-                    )
-                    result2 = detect_clips_local(
-                        " ".join(w["word"] for w in second_words), second_words,
-                        duration, cfg["llm_url"], cfg["llm_model"],
-                    )
-                    all_det_clips = result1["clips"] + result2["clips"]
-                    all_det_clips = validate_clips(all_det_clips, duration)
-                    all_det_clips = dedup_clips(all_det_clips)
-                    detection_result = {
-                        "clips": all_det_clips,
-                        "total_candidates": len(all_det_clips),
-                        "video_summary": result1.get("video_summary") or result2.get("video_summary", ""),
-                    }
-                else:
-                    detection_result = detect_clips_local(
-                        transcript["text"], transcript["words"],
-                        duration, cfg["llm_url"], cfg["llm_model"],
-                    )
-            except Exception as e:
-                if "Connection" in str(type(e).__name__) or "connection" in str(e).lower():
-                    console.print(
-                        f"[red]Cannot reach LLM at {cfg['llm_url']} — is the server running?[/red]"
-                    )
-                else:
-                    console.print(f"[red]Clip detection failed: {e}[/red]")
-                raise typer.Exit(code=1)
+        if os.path.isfile(clips_cache) and not overwrite:
+            with open(clips_cache) as f:
+                detection_result = json.load(f)
+            console.print(f"[green]Loaded cached clips ({len(detection_result.get('clips', []))} candidates)[/green]")
+        else:
+            with console.status("[bold blue]Detecting viral clips..."):
+                try:
+                    if duration > 3600:
+                        split_point = duration / 2
+                        overlap = 300.0
+                        first_words = [w for w in transcript["words"] if w.get("end", 0) <= split_point + overlap / 2]
+                        second_words = [w for w in transcript["words"] if w.get("start", 0) >= split_point - overlap / 2]
+
+                        result1 = detect_clips_local(
+                            " ".join(w["word"] for w in first_words), first_words,
+                            duration, cfg["llm_url"], cfg["llm_model"],
+                        )
+                        result2 = detect_clips_local(
+                            " ".join(w["word"] for w in second_words), second_words,
+                            duration, cfg["llm_url"], cfg["llm_model"],
+                        )
+                        all_det_clips = result1["clips"] + result2["clips"]
+                        all_det_clips = validate_clips(all_det_clips, duration)
+                        all_det_clips = dedup_clips(all_det_clips)
+                        detection_result = {
+                            "clips": all_det_clips,
+                            "total_candidates": len(all_det_clips),
+                            "video_summary": result1.get("video_summary") or result2.get("video_summary", ""),
+                        }
+                    else:
+                        detection_result = detect_clips_local(
+                            transcript["text"], transcript["words"],
+                            duration, cfg["llm_url"], cfg["llm_model"],
+                        )
+                except Exception as e:
+                    if "Connection" in str(type(e).__name__) or "connection" in str(e).lower():
+                        console.print(
+                            f"[red]Cannot reach LLM at {cfg['llm_url']} — is the server running?[/red]"
+                        )
+                    else:
+                        console.print(f"[red]Clip detection failed: {e}[/red]")
+                    raise typer.Exit(code=1)
+
+            # Cache clips for resume
+            with open(clips_cache, "w") as f:
+                json.dump(detection_result, f)
 
         clips = detection_result["clips"][:max_clips]
 
