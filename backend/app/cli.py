@@ -23,8 +23,8 @@ from rich.console import Console
 from rich.progress import Progress
 from rich.table import Table
 
+import anthropic
 from faster_whisper import WhisperModel
-from openai import OpenAI
 
 from app.cli_config import resolve_config, interactive_setup, DEFAULT_CONFIG_PATH
 from app.videos.validation import validate_magic_bytes, validate_with_ffprobe
@@ -78,11 +78,11 @@ def detect_clips_local(
     transcript_text: str,
     word_timestamps: list[dict],
     video_duration: float,
-    llm_url: str,
-    llm_model: str,
+    llm_url: str | None = None,
+    llm_model: str = "claude-haiku-4-5-20251001",
     prompt_version: str = "virality_v1",
 ) -> dict:
-    """Detect viral clips using a local OpenAI-compatible LLM.
+    """Detect viral clips using Anthropic Claude API.
 
     Returns {"clips": [...], "total_candidates": int, "video_summary": str}
     """
@@ -92,19 +92,17 @@ def detect_clips_local(
     prompt = prompt.replace("{video_duration:.1f}", f"{video_duration:.1f}")
     prompt = prompt.replace("{video_duration_formatted}", _format_duration(video_duration))
 
-    client = OpenAI(base_url=llm_url, api_key="not-needed")
+    client = anthropic.Anthropic()
 
     for attempt in range(MAX_LLM_RETRIES + 1):
         try:
-            response = client.chat.completions.create(
+            response = client.messages.create(
                 model=llm_model,
-                messages=[{"role": "user", "content": prompt}],
                 max_tokens=4096,
-                temperature=0.1,
-                timeout=120,
+                messages=[{"role": "user", "content": prompt}],
             )
 
-            raw_text = response.choices[0].message.content
+            raw_text = response.content[0].text
             result = parse_clip_response(raw_text)
             clips = result.get("clips", [])
             clips = validate_clips(clips, video_duration)
@@ -116,7 +114,6 @@ def detect_clips_local(
                     "total_candidates": len(clips),
                     "video_summary": result.get("video_summary", ""),
                 }
-            # No valid clips — retry
             continue
 
         except Exception as e:
@@ -225,24 +222,20 @@ def process(
     max_clips: int = typer.Option(15, "--max-clips", help="Max clip candidates"),
     no_captions: bool = typer.Option(False, "--no-captions", help="Skip caption burn-in"),
     whisper_model: str = typer.Option(None, "--whisper-model", help="Whisper model name"),
-    llm_url: str = typer.Option(None, "--llm-url", help="LLM endpoint URL"),
-    llm_model: str = typer.Option(None, "--llm-model", help="LLM model name"),
     overwrite: bool = typer.Option(False, "--overwrite", help="Overwrite existing output files"),
     config: str = typer.Option(DEFAULT_CONFIG_PATH, "--config", help="Config file path"),
 ):
     """Process a video file: detect viral clips and render them."""
     # Resolve config
     cfg = resolve_config(
-        cli_llm_url=llm_url,
-        cli_llm_model=llm_model,
         cli_whisper_model=whisper_model,
         config_path=config,
     )
 
     # Check required config
-    if not cfg["llm_url"] or not cfg["llm_model"]:
-        console.print("[yellow]LLM not configured. Running setup...[/yellow]")
-        cfg = interactive_setup(config)
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        console.print("[red]ANTHROPIC_API_KEY environment variable not set.[/red]")
+        raise typer.Exit(code=1)
 
     # Parse platforms
     platforms = [p.strip() for p in platform.split(",")]
@@ -363,11 +356,11 @@ def process(
 
                         result1 = detect_clips_local(
                             " ".join(w["word"] for w in first_words), first_words,
-                            duration, cfg["llm_url"], cfg["llm_model"],
+                            duration,
                         )
                         result2 = detect_clips_local(
                             " ".join(w["word"] for w in second_words), second_words,
-                            duration, cfg["llm_url"], cfg["llm_model"],
+                            duration,
                         )
                         all_det_clips = result1["clips"] + result2["clips"]
                         all_det_clips = validate_clips(all_det_clips, duration)
@@ -380,13 +373,11 @@ def process(
                     else:
                         detection_result = detect_clips_local(
                             transcript["text"], transcript["words"],
-                            duration, cfg["llm_url"], cfg["llm_model"],
+                            duration,
                         )
                 except Exception as e:
-                    if "Connection" in str(type(e).__name__) or "connection" in str(e).lower():
-                        console.print(
-                            f"[red]Cannot reach LLM at {cfg['llm_url']} — is the server running?[/red]"
-                        )
+                    if "authentication" in str(e).lower() or "api_key" in str(e).lower():
+                        console.print("[red]Anthropic API key invalid. Check ANTHROPIC_API_KEY.[/red]")
                     else:
                         console.print(f"[red]Clip detection failed: {e}[/red]")
                     raise typer.Exit(code=1)
