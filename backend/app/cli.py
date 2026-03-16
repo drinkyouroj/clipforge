@@ -1,5 +1,6 @@
 """ClipForge CLI — standalone video clip detection and rendering."""
 
+import json
 import os
 import shutil
 import subprocess
@@ -7,13 +8,23 @@ import sys
 import tempfile
 from pathlib import Path
 
+# Ensure the backend directory is on sys.path when run directly.
+# Python adds the script's directory (app/) to sys.path[0], which shadows
+# the app package. Remove it and add the backend directory instead.
+_backend_dir = str(Path(__file__).resolve().parent.parent)
+_script_dir = str(Path(__file__).resolve().parent)
+if _script_dir in sys.path:
+    sys.path.remove(_script_dir)
+if _backend_dir not in sys.path:
+    sys.path.insert(0, _backend_dir)
+
 import typer
 from rich.console import Console
 from rich.progress import Progress
 from rich.table import Table
 
+import anthropic
 from faster_whisper import WhisperModel
-from openai import OpenAI
 
 from app.cli_config import resolve_config, interactive_setup, DEFAULT_CONFIG_PATH
 from app.videos.validation import validate_magic_bytes, validate_with_ffprobe
@@ -67,11 +78,11 @@ def detect_clips_local(
     transcript_text: str,
     word_timestamps: list[dict],
     video_duration: float,
-    llm_url: str,
-    llm_model: str,
+    llm_url: str | None = None,
+    llm_model: str = "claude-haiku-4-5-20251001",
     prompt_version: str = "virality_v1",
 ) -> dict:
-    """Detect viral clips using a local OpenAI-compatible LLM.
+    """Detect viral clips using Anthropic Claude API.
 
     Returns {"clips": [...], "total_candidates": int, "video_summary": str}
     """
@@ -81,19 +92,17 @@ def detect_clips_local(
     prompt = prompt.replace("{video_duration:.1f}", f"{video_duration:.1f}")
     prompt = prompt.replace("{video_duration_formatted}", _format_duration(video_duration))
 
-    client = OpenAI(base_url=llm_url, api_key="not-needed")
+    client = anthropic.Anthropic()
 
     for attempt in range(MAX_LLM_RETRIES + 1):
         try:
-            response = client.chat.completions.create(
+            response = client.messages.create(
                 model=llm_model,
-                messages=[{"role": "user", "content": prompt}],
                 max_tokens=4096,
-                temperature=0.1,
-                timeout=120,
+                messages=[{"role": "user", "content": prompt}],
             )
 
-            raw_text = response.choices[0].message.content
+            raw_text = response.content[0].text
             result = parse_clip_response(raw_text)
             clips = result.get("clips", [])
             clips = validate_clips(clips, video_duration)
@@ -105,7 +114,6 @@ def detect_clips_local(
                     "total_candidates": len(clips),
                     "video_summary": result.get("video_summary", ""),
                 }
-            # No valid clips — retry
             continue
 
         except Exception as e:
@@ -177,7 +185,10 @@ def render_clip_local(
     )
 
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    subprocess.run(cmd, check=True, capture_output=True)
+    result = subprocess.run(cmd, capture_output=True)
+    if result.returncode != 0:
+        stderr = result.stderr.decode(errors="replace") if result.stderr else ""
+        raise RuntimeError(f"FFmpeg failed (exit {result.returncode}):\n{stderr}")
 
     return {"face_track": face_track}
 
@@ -214,24 +225,20 @@ def process(
     max_clips: int = typer.Option(15, "--max-clips", help="Max clip candidates"),
     no_captions: bool = typer.Option(False, "--no-captions", help="Skip caption burn-in"),
     whisper_model: str = typer.Option(None, "--whisper-model", help="Whisper model name"),
-    llm_url: str = typer.Option(None, "--llm-url", help="LLM endpoint URL"),
-    llm_model: str = typer.Option(None, "--llm-model", help="LLM model name"),
     overwrite: bool = typer.Option(False, "--overwrite", help="Overwrite existing output files"),
     config: str = typer.Option(DEFAULT_CONFIG_PATH, "--config", help="Config file path"),
 ):
     """Process a video file: detect viral clips and render them."""
     # Resolve config
     cfg = resolve_config(
-        cli_llm_url=llm_url,
-        cli_llm_model=llm_model,
         cli_whisper_model=whisper_model,
         config_path=config,
     )
 
     # Check required config
-    if not cfg["llm_url"] or not cfg["llm_model"]:
-        console.print("[yellow]LLM not configured. Running setup...[/yellow]")
-        cfg = interactive_setup(config)
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        console.print("[red]ANTHROPIC_API_KEY environment variable not set.[/red]")
+        raise typer.Exit(code=1)
 
     # Parse platforms
     platforms = [p.strip() for p in platform.split(",")]
@@ -241,10 +248,12 @@ def process(
             console.print(f"[red]Unknown platform: {p}[/red]")
             raise typer.Exit(code=1)
 
-    # Set output directory
+    # Set output directory — sanitize video stem for filesystem safety
     if output_dir is None:
+        import re
         stem = Path(video_path).stem
-        output_dir = os.path.join(".", "clipforge-output", stem)
+        safe_stem = re.sub(r'[|<>:"/\\?*]', '_', stem)
+        output_dir = os.path.join(".", "clipforge-output", safe_stem)
 
     # Create temp directory (secure, per DECISION_010)
     tmp_dir = tempfile.mkdtemp(prefix="clipforge-")
@@ -268,46 +277,63 @@ def process(
         duration = probe["duration"]
         console.print(f"[green]Valid video:[/green] {Path(video_path).name} ({duration:.0f}s)")
 
-        # === Step 2: Extract audio ===
-        audio_path = os.path.join(tmp_dir, "audio.mp3")
-        with console.status("[bold blue]Extracting audio..."):
-            from app.transcription.audio import extract_audio
-            extract_audio(video_path, audio_path)
-        console.print("[green]Audio extracted.[/green]")
+        # Create a symlink with a safe filename for FFmpeg.
+        # FFmpeg interprets |, [, ] etc. as protocol separators even in list-mode.
+        video_ext = Path(video_path).suffix or ".mp4"
+        safe_video_path = os.path.join(tmp_dir, f"input{video_ext}")
+        os.symlink(os.path.abspath(video_path), safe_video_path)
 
-        # === Step 3: Transcribe ===
-        from app.transcription.audio import split_audio
-        chunks = split_audio(audio_path, tmp_dir)
-        if len(chunks) <= 1:
-            chunks = [audio_path]
+        # === Steps 2-3: Extract audio + Transcribe (with resume cache) ===
+        os.makedirs(output_dir, exist_ok=True)
+        transcript_cache = os.path.join(output_dir, "transcript.json")
 
-        chunk_duration = 3000
+        if os.path.isfile(transcript_cache) and not overwrite:
+            with open(transcript_cache) as f:
+                transcript = json.load(f)
+            word_count = len(transcript["words"])
+            console.print(f"[green]Loaded cached transcript ({word_count} words)[/green]")
+        else:
+            audio_path = os.path.join(tmp_dir, "audio.wav")
+            with console.status("[bold blue]Extracting audio..."):
+                from app.transcription.audio import extract_audio
+                extract_audio(safe_video_path, audio_path)
+            console.print("[green]Audio extracted.[/green]")
 
-        all_words = []
-        all_text = []
-        with Progress() as progress:
-            task = progress.add_task(
-                f"[blue]Transcribing with {cfg['whisper_model']} model...",
-                total=len(chunks),
-            )
-            for chunk_idx, chunk_path in enumerate(chunks):
-                result = transcribe_local(chunk_path, cfg["whisper_model"])
-                # Apply timestamp offset for chunked audio (DECISION_010-B fix)
-                time_offset = chunk_idx * chunk_duration if len(chunks) > 1 else 0.0
-                for w in result["words"]:
-                    w["start"] += time_offset
-                    w["end"] += time_offset
-                all_words.extend(result["words"])
-                all_text.append(result["text"])
-                progress.advance(task)
+            from app.transcription.audio import split_audio
+            chunks = split_audio(audio_path, tmp_dir)
+            if len(chunks) <= 1:
+                chunks = [audio_path]
 
-        transcript = {
-            "text": " ".join(all_text),
-            "words": all_words,
-        }
+            chunk_duration = 3000
 
-        word_count = len(transcript["words"])
-        console.print(f"[green]Transcribed:[/green] {word_count} words")
+            all_words = []
+            all_text = []
+            with Progress() as progress:
+                task = progress.add_task(
+                    f"[blue]Transcribing with {cfg['whisper_model']} model...",
+                    total=len(chunks),
+                )
+                for chunk_idx, chunk_path in enumerate(chunks):
+                    result = transcribe_local(chunk_path, cfg["whisper_model"])
+                    time_offset = chunk_idx * chunk_duration if len(chunks) > 1 else 0.0
+                    for w in result["words"]:
+                        w["start"] += time_offset
+                        w["end"] += time_offset
+                    all_words.extend(result["words"])
+                    all_text.append(result["text"])
+                    progress.advance(task)
+
+            transcript = {
+                "text": " ".join(all_text),
+                "words": all_words,
+            }
+
+            # Cache transcript for resume
+            with open(transcript_cache, "w") as f:
+                json.dump(transcript, f)
+
+            word_count = len(transcript["words"])
+            console.print(f"[green]Transcribed:[/green] {word_count} words")
 
         # Empty transcript guard (DECISION_010)
         if word_count < 50:
@@ -317,45 +343,53 @@ def process(
             )
             raise typer.Exit(code=1)
 
-        # === Step 4: Detect clips ===
-        with console.status("[bold blue]Detecting viral clips..."):
-            try:
-                if duration > 3600:
-                    # Long video: split and detect in halves
-                    split_point = duration / 2
-                    overlap = 300.0
-                    first_words = [w for w in transcript["words"] if w.get("end", 0) <= split_point + overlap / 2]
-                    second_words = [w for w in transcript["words"] if w.get("start", 0) >= split_point - overlap / 2]
+        # === Step 4: Detect clips (with resume cache) ===
+        clips_cache = os.path.join(output_dir, "clips.json")
 
-                    result1 = detect_clips_local(
-                        " ".join(w["word"] for w in first_words), first_words,
-                        duration, cfg["llm_url"], cfg["llm_model"],
-                    )
-                    result2 = detect_clips_local(
-                        " ".join(w["word"] for w in second_words), second_words,
-                        duration, cfg["llm_url"], cfg["llm_model"],
-                    )
-                    all_det_clips = result1["clips"] + result2["clips"]
-                    all_det_clips = validate_clips(all_det_clips, duration)
-                    all_det_clips = dedup_clips(all_det_clips)
-                    detection_result = {
-                        "clips": all_det_clips,
-                        "total_candidates": len(all_det_clips),
-                        "video_summary": result1.get("video_summary") or result2.get("video_summary", ""),
-                    }
-                else:
-                    detection_result = detect_clips_local(
-                        transcript["text"], transcript["words"],
-                        duration, cfg["llm_url"], cfg["llm_model"],
-                    )
-            except Exception as e:
-                if "Connection" in str(type(e).__name__) or "connection" in str(e).lower():
-                    console.print(
-                        f"[red]Cannot reach LLM at {cfg['llm_url']} — is the server running?[/red]"
-                    )
-                else:
-                    console.print(f"[red]Clip detection failed: {e}[/red]")
-                raise typer.Exit(code=1)
+        if os.path.isfile(clips_cache) and not overwrite:
+            with open(clips_cache) as f:
+                detection_result = json.load(f)
+            console.print(f"[green]Loaded cached clips ({len(detection_result.get('clips', []))} candidates)[/green]")
+        else:
+            with console.status("[bold blue]Detecting viral clips..."):
+                try:
+                    if duration > 3600:
+                        split_point = duration / 2
+                        overlap = 300.0
+                        first_words = [w for w in transcript["words"] if w.get("end", 0) <= split_point + overlap / 2]
+                        second_words = [w for w in transcript["words"] if w.get("start", 0) >= split_point - overlap / 2]
+
+                        result1 = detect_clips_local(
+                            " ".join(w["word"] for w in first_words), first_words,
+                            duration,
+                        )
+                        result2 = detect_clips_local(
+                            " ".join(w["word"] for w in second_words), second_words,
+                            duration,
+                        )
+                        all_det_clips = result1["clips"] + result2["clips"]
+                        all_det_clips = validate_clips(all_det_clips, duration)
+                        all_det_clips = dedup_clips(all_det_clips)
+                        detection_result = {
+                            "clips": all_det_clips,
+                            "total_candidates": len(all_det_clips),
+                            "video_summary": result1.get("video_summary") or result2.get("video_summary", ""),
+                        }
+                    else:
+                        detection_result = detect_clips_local(
+                            transcript["text"], transcript["words"],
+                            duration,
+                        )
+                except Exception as e:
+                    if "authentication" in str(e).lower() or "api_key" in str(e).lower():
+                        console.print("[red]Anthropic API key invalid. Check ANTHROPIC_API_KEY.[/red]")
+                    else:
+                        console.print(f"[red]Clip detection failed: {e}[/red]")
+                    raise typer.Exit(code=1)
+
+            # Cache clips for resume
+            with open(clips_cache, "w") as f:
+                json.dump(detection_result, f)
 
         clips = detection_result["clips"][:max_clips]
 
@@ -458,6 +492,11 @@ def process(
                 video_height = int(stream.get("height", 1080))
                 break
 
+        if not no_captions:
+            from app.rendering.ffmpeg_cmd import has_ass_filter
+            if not has_ass_filter():
+                console.print("[yellow]Warning: FFmpeg missing libass — captions will be skipped.[/yellow]")
+
         rendered_files = []
         total_renders = len(selected_clips) * len(platforms)
 
@@ -497,7 +536,7 @@ def process(
 
                     try:
                         result = render_clip_local(
-                            video_path=video_path,
+                            video_path=safe_video_path,
                             start_time=start,
                             end_time=end,
                             platform=plat,
@@ -551,3 +590,7 @@ def process(
     finally:
         # Clean up temp directory
         shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+if __name__ == "__main__":
+    app()

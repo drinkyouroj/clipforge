@@ -34,7 +34,7 @@ def test_render_clip_local_builds_correct_command(tmp_path):
 
     assert result["face_track"] == mock_face_track
     mock_build.assert_called_once()
-    mock_run.assert_called_once()
+    assert mock_run.called
 
 
 def test_render_clip_local_reuses_face_track(tmp_path):

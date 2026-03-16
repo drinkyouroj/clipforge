@@ -14,17 +14,17 @@ class Settings(BaseSettings):
     s3_region: str = "auto"
     openai_api_key: str = ""
     anthropic_api_key: str = ""
-    max_upload_size: int = 500 * 1024 * 1024  # 500MB
+    max_upload_size: int = 25 * 1024 * 1024 * 1024  # 25GB
     upload_rate_limit: int = 5  # per hour
     render_rate_limit_free: int = 10  # per day
-    frontend_url: str = "http://localhost:5173"
+    frontend_url: str = "http://localhost:5175"
     stripe_secret_key: str = ""
     stripe_webhook_secret: str = ""
     stripe_price_starter: str = ""
     stripe_price_pro: str = ""
 
     class Config:
-        env_file = ".env"
+        env_file = ("../.env", ".env")
 
 
 settings = Settings()
