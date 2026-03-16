@@ -166,13 +166,25 @@ def detect_faces_in_frames(frame_paths: list[str], interval: float = 0.5) -> lis
     """
     try:
         import mediapipe as mp
+        import numpy as np
     except ImportError:
         logger.warning("mediapipe not available — falling back to center crop")
         return []
 
-    face_detection = mp.solutions.face_detection.FaceDetection(
-        model_selection=1, min_detection_confidence=0.5
-    )
+    # Find model file bundled with the package
+    model_path = os.path.join(os.path.dirname(__file__), "models", "blaze_face_short_range.tflite")
+    if not os.path.isfile(model_path):
+        logger.warning("face detection model not found — falling back to center crop")
+        return []
+
+    try:
+        options = mp.tasks.vision.FaceDetectorOptions(
+            base_options=mp.tasks.BaseOptions(model_asset_path=model_path),
+        )
+        detector = mp.tasks.vision.FaceDetector.create_from_options(options)
+    except Exception as e:
+        logger.warning(f"face detection init failed: {e} — falling back to center crop")
+        return []
 
     import cv2
 
@@ -184,16 +196,16 @@ def detect_faces_in_frames(frame_paths: list[str], interval: float = 0.5) -> lis
 
         h, w = image.shape[:2]
         rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        results = face_detection.process(rgb)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+        result = detector.detect(mp_image)
 
-        if results.detections:
-            # Use first detected face
-            bbox = results.detections[0].location_data.relative_bounding_box
-            center_x = int((bbox.xmin + bbox.width / 2) * w)
-            center_y = int((bbox.ymin + bbox.height / 2) * h)
+        if result.detections:
+            bbox = result.detections[0].bounding_box
+            center_x = bbox.origin_x + bbox.width // 2
+            center_y = bbox.origin_y + bbox.height // 2
             track.append({"t": i * interval, "x": center_x, "y": center_y})
 
-    face_detection.close()
+    detector.close()
     return track
 
 
