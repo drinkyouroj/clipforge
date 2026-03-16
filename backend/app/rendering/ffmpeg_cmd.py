@@ -3,6 +3,7 @@
 import subprocess
 
 _h264_encoder = None
+_ass_filter_available = None
 
 
 def get_h264_encoder() -> tuple[str, list[str]]:
@@ -37,6 +38,24 @@ def get_h264_encoder() -> tuple[str, list[str]]:
         _h264_encoder = ("libx264", ["-crf", "23"])
 
     return _h264_encoder
+
+
+def has_ass_filter() -> bool:
+    """Check if FFmpeg has the ass subtitle filter (requires libass)."""
+    global _ass_filter_available
+    if _ass_filter_available is not None:
+        return _ass_filter_available
+
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-filters", "-hide_banner"],
+            capture_output=True, text=True, timeout=5,
+        )
+        _ass_filter_available = " ass " in result.stdout
+    except Exception:
+        _ass_filter_available = False
+
+    return _ass_filter_available
 
 
 def build_ffmpeg_command(
@@ -80,8 +99,8 @@ def build_ffmpeg_command(
     # Scale to target resolution
     vf_parts.append(f"scale={width}:{height}")
 
-    # Captions
-    if ass_path:
+    # Captions (requires libass)
+    if ass_path and has_ass_filter():
         vf_parts.append(f"ass={ass_path}")
 
     vf_chain = ",".join(vf_parts)

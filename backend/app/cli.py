@@ -492,6 +492,11 @@ def process(
                 video_height = int(stream.get("height", 1080))
                 break
 
+        if not no_captions:
+            from app.rendering.ffmpeg_cmd import has_ass_filter
+            if not has_ass_filter():
+                console.print("[yellow]Warning: FFmpeg missing libass — captions will be skipped.[/yellow]")
+
         rendered_files = []
         total_renders = len(selected_clips) * len(platforms)
 
