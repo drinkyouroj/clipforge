@@ -31,10 +31,10 @@ async def upload(
             detail="Upload rate limit exceeded (5 per hour)",
         )
 
-    video, error = await upload_video(db, current_user.id, file)
+    video, error, job_id = await upload_video(db, current_user.id, file)
 
     if error == "file_too_large":
-        raise HTTPException(status_code=413, detail="File exceeds 500MB limit")
+        raise HTTPException(status_code=413, detail="File exceeds 25GB limit")
     if error == "invalid_type":
         raise HTTPException(status_code=415, detail="File is not a supported video format")
     if error == "invalid_video":
@@ -42,7 +42,15 @@ async def upload(
     if error:
         raise HTTPException(status_code=500, detail="Upload failed")
 
-    return video
+    return VideoUploadResponse(
+        id=video.id,
+        original_filename=video.original_filename,
+        file_size=video.file_size,
+        duration=video.duration,
+        status=video.status,
+        uploaded_at=video.uploaded_at,
+        job_id=job_id,
+    )
 
 
 @router.get("/", response_model=VideoListResponse)

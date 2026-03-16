@@ -3,6 +3,7 @@ import tempfile
 from datetime import datetime, timedelta
 from uuid import UUID
 
+from arq.connections import ArqRedis, create_pool, RedisSettings
 from fastapi import UploadFile
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -33,30 +34,36 @@ async def check_upload_rate_limit(db: AsyncSession, user_id: UUID) -> bool:
 
 async def upload_video(
     db: AsyncSession, user_id: UUID, file: UploadFile
-) -> tuple[Video, str | None]:
+) -> tuple[Video | None, str | None, UUID | None]:
     """Upload a video. Returns (video, error_message). error_message is None on success."""
     _ensure_temp_dir()
     temp_path = None
 
     try:
-        # Save to temp file
+        # Stream to temp file in chunks to avoid loading entire file in memory
         with tempfile.NamedTemporaryFile(
             dir=TEMP_DIR, delete=False, suffix=os.path.splitext(file.filename or ".mp4")[1]
         ) as tmp:
             temp_path = tmp.name
-            content = await file.read()
-            if len(content) > settings.max_upload_size:
-                return None, "file_too_large"
-            tmp.write(content)
+            file_size = 0
+            chunk_size = 8 * 1024 * 1024  # 8MB chunks
+            while True:
+                chunk = await file.read(chunk_size)
+                if not chunk:
+                    break
+                file_size += len(chunk)
+                if file_size > settings.max_upload_size:
+                    return None, "file_too_large", None
+                tmp.write(chunk)
 
         # Validate magic bytes
         if not validate_magic_bytes(temp_path):
-            return None, "invalid_type"
+            return None, "invalid_type", None
 
         # Validate with ffprobe
         probe_data = validate_with_ffprobe(temp_path)
         if probe_data is None:
-            return None, "invalid_video"
+            return None, "invalid_video", None
 
         # Upload to S3
         s3_key = generate_s3_key(user_id, file.filename or "upload.mp4")
@@ -68,15 +75,31 @@ async def upload_video(
                 user_id=user_id,
                 original_filename=file.filename or "upload.mp4",
                 s3_key=s3_key,
-                file_size=len(content),
+                file_size=file_size,
                 duration=probe_data["duration"],
                 mime_type=file.content_type,
                 status="uploaded",
             )
             db.add(video)
+            await db.flush()
+
+            # Create transcription job and enqueue it
+            job = Job(
+                video_id=video.id,
+                job_type="transcribe",
+                status="pending",
+            )
+            db.add(job)
             await db.commit()
             await db.refresh(video)
-            return video, None
+            await db.refresh(job)
+
+            # Enqueue ARQ task
+            redis = await create_pool(RedisSettings.from_dsn(settings.redis_url))
+            await redis.enqueue_job("transcribe_video", str(job.id), str(video.id))
+            await redis.aclose()
+
+            return video, None, job.id
         except Exception:
             # DB insert failed — clean up S3 object per DECISION_003
             await delete_s3_object(s3_key)
