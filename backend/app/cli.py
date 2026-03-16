@@ -185,7 +185,10 @@ def render_clip_local(
     )
 
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    subprocess.run(cmd, check=True, capture_output=True)
+    result = subprocess.run(cmd, capture_output=True)
+    if result.returncode != 0:
+        stderr = result.stderr.decode(errors="replace") if result.stderr else ""
+        raise RuntimeError(f"FFmpeg failed (exit {result.returncode}):\n{stderr}")
 
     return {"face_track": face_track}
 
@@ -245,10 +248,12 @@ def process(
             console.print(f"[red]Unknown platform: {p}[/red]")
             raise typer.Exit(code=1)
 
-    # Set output directory
+    # Set output directory — sanitize video stem for filesystem safety
     if output_dir is None:
+        import re
         stem = Path(video_path).stem
-        output_dir = os.path.join(".", "clipforge-output", stem)
+        safe_stem = re.sub(r'[|<>:"/\\?*]', '_', stem)
+        output_dir = os.path.join(".", "clipforge-output", safe_stem)
 
     # Create temp directory (secure, per DECISION_010)
     tmp_dir = tempfile.mkdtemp(prefix="clipforge-")
